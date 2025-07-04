@@ -1,0 +1,169 @@
+#!/usr/bin/env zsh
+# ==============================================================================
+# Platform-Aware Path and Environment Setup for Apple Silicon (M1/M2/M3)
+# This script defines core helper functions and configures essential system
+# and custom paths.
+# ==============================================================================
+
+# --- Colors ---
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+BLUE=$'\033[0;34m'
+RESET=$'\033[0m'
+
+# --- Environment Directory & Log File ---
+# Ensure the directory for logs exists and clear the log file
+ENV_DIR="$HOME/.zsh_envs"
+LOG_FILE="$ENV_DIR/zsh_paths_load.log"
+/bin/mkdir -p "$ENV_DIR" && : > "$LOG_FILE"
+
+# Log actions to persistent file
+log_action() {
+  echo "$(/bin/date '+%H:%M:%S') | $1" | /usr/bin/tee -a "$LOG_FILE"
+}
+
+# --- Helper: Deduplicate colon-separated list (Zsh native) ---
+# This function takes a colon-separated string (e.g., "$PATH")
+# and returns a new string with duplicate entries removed, preserving order.
+# This avoids external commands like awk/paste which can be problematic.
+dedup_colon_list() {
+  local -a unique_paths
+  local -A seen_paths
+  local IFS=':' # Set Internal Field Separator to colon for splitting
+
+  for p in ${(s/:/)1}; do # Split the input string by colon into an array
+    if [[ -n "$p" && -z "$seen_paths[$p]" ]]; then # If path is not empty and not seen
+      unique_paths+="$p" # Add to unique list
+      seen_paths[$p]=1   # Mark as seen
+    fi
+  done
+  echo "${(j/:/)unique_paths}" # Join unique paths back with colon
+}
+
+# --- Helper: Add a directory to PATH ---
+# pathadd: Adds a directory to the PATH environment variable.
+# Arguments:
+#   $1: The directory to add.
+#   $2 (optional): "prepend" to add to the beginning, "append" (default) to add to the end.
+pathadd() {
+  local dir="$1"
+  local position="${2:-append}" # Default to append
+
+  if [[ ! -d "$dir" ]]; then
+    log_action "${YELLOW}⚠️ Skipping (not found): $dir${RESET}"
+    return
+  fi
+
+  # Check if the directory is already in PATH
+  if [[ ":$PATH:" == *":$dir:"* ]]; then
+    # log_action "  Already in PATH: $dir" # Optional: log if already present
+    return
+  fi
+
+  if [[ "$position" == "prepend" ]]; then
+    export PATH="$dir:$PATH"
+  else
+    export PATH="$PATH:$dir"
+  fi
+  export PATH="$(dedup_colon_list "$PATH")" # Deduplicate PATH after adding
+  log_action "✓ Added to PATH: ${BLUE}$dir${RESET}"
+}
+
+# --- Helper: Add a directory to library paths (DYLD_LIBRARY_PATH, LD_LIBRARY_PATH) ---
+# libpathadd: Adds a directory to common library environment variables.
+# Arguments:
+#   $1: The directory to add.
+libpathadd() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then
+    log_action "${YELLOW}⚠️ Skipping (not found): $dir (for lib paths)${RESET}"
+    return
+  fi
+
+  for var in DYLD_LIBRARY_PATH LD_LIBRARY_PATH; do
+    local current_val="${(P)var}" # Get the current value of the variable dynamically
+    if [[ -z "$current_val" || ":$current_val:" != *":$dir:"* ]]; then
+      export $var="$(dedup_colon_list "$dir:$current_val")"
+      log_action "🔧 Added to $var: ${BLUE}$dir${RESET}"
+    fi
+  done
+}
+
+# --- Helper: Add a directory to compiler flags (LDFLAGS, CPPFLAGS) ---
+# add_to_library_env: Adds library and include directories to LDFLAGS and CPPFLAGS.
+# Arguments:
+#   $1: The root directory of the library/tool.
+add_to_library_env() {
+  local root="$1"
+  local lib_dir="$root/lib"
+  local include_dir="$root/include"
+
+  if [[ -d "$lib_dir" ]]; then
+    if [[ "$LDFLAGS" != *"-L$lib_dir"* ]]; then
+      export LDFLAGS="-L$lib_dir $LDFLAGS"
+      log_action "  Added to LDFLAGS: -L$lib_dir"
+    fi
+    # Also add to dynamic library paths if not already handled by libpathadd
+    libpathadd "$lib_dir"
+  fi
+
+  if [[ -d "$include_dir" ]]; then
+    if [[ "$CPPFLAGS" != *"-I$include_dir"* ]]; then
+      export CPPFLAGS="-I$include_dir $CPPFLAGS"
+      log_action "  Added to CPPFLAGS: -I$include_dir"
+    fi
+  fi
+}
+
+# --- Architecture Detection ---
+ARCH=$(/usr/bin/uname -m)
+log_action "🧠 Architecture Detected: $ARCH"
+echo "🧠 Architecture Detected: $ARCH" # Also print to console
+if [[ "$ARCH" != "arm64" ]]; then
+  log_action "${YELLOW}⚠️ Not Apple Silicon (M2). Adjust script accordingly.${RESET}"
+  echo "${YELLOW}⚠️ Not Apple Silicon (M2). Adjust script accordingly.${RESET}"
+fi
+
+# --- Configure Base System Paths ---
+echo "\n${GREEN}🛠️ Configuring system paths...${RESET}"
+log_action "Configuring system paths..."
+base_paths=(
+  "/usr/bin" "/bin" "/usr/sbin" "/sbin"
+  "/usr/local/bin" "/usr/local/" # /usr/local/ is usually for general local installs
+  "/opt/local/bin" "/opt/local/" # MacPorts default
+  "/opt/R" # Common R installation path
+  "/opt/homebrew/bin"  # Homebrew on Apple Silicon
+)
+for p in "${base_paths[@]}"; do pathadd "$p" "prepend"; done
+
+# --- Configure Custom Paths ---
+echo "\n${GREEN}📂 Configuring custom paths...${RESET}"
+log_action "Configuring custom paths..."
+custom_paths=(
+  "$HOME/.local/bin" # User-specific executables
+  "/Applications" # Standard macOS applications
+  "/Volumes/NVM/Applications" # Your custom applications volume
+  "/Volumes/NVM/sources" # Your custom sources volume
+  "/Volumes/NVM/sources/libs" # Libraries within sources
+  "/Volumes/NVM/sources/neutron" # Specific project/source directory
+  "/Volumes/NVM/sources/neutron/vtk"  # Your VTK build directory
+)
+for p in "${custom_paths[@]}"; do pathadd "$p"; done # Default to append for custom paths
+
+# --- GUI Tool Paths (Add only the MacOS/bin directories where executables are) ---
+echo "\n${GREEN}🖥️ Configuring GUI tool paths...${RESET}"
+log_action "Configuring GUI tool paths..."
+gui_tool_bin_paths=(
+  "/Applications/Xcode.app/Contents/Developer/usr/bin" # Xcode command line tools
+  "/Volumes/NVM/Applications/Xcode.app/Contents/Developer/usr/bin" # If Xcode is on NVM
+  "/Volumes/NVM/Applications/R.app/Contents/MacOS"
+  "/Volumes/NVM/Applications/SCALE-6.2.1.app/Contents/MacOS"
+  "/Volumes/NVM/Applications/TeX/TeXShop.app/Contents/MacOS"
+  # Add other GUI tool bin paths here if they are not already covered by general app paths
+  # e.g., "/Applications/ParaView.app/Contents/MacOS"
+)
+for p in "${gui_tool_bin_paths[@]}"; do pathadd "$p"; done
+
+# Ensure PATH is fully deduplicated at the end of this script
+export PATH="$(dedup_colon_list "$PATH")"
+log_action "Final PATH after .zsh_paths: $PATH"

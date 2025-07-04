@@ -1,0 +1,49 @@
+#!/usr/bin/env zsh
+# ==============================================================================
+# 🧠 install_env_system.zsh — Environment Finalization (No Detection)
+# For Apple Silicon macOS Scientific Setup
+# ==============================================================================
+
+# --- Color Codes ---
+GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RED=$'\033[0;31m'; BLUE=$'\033[0;34m'; RESET=$'\033[0m'
+
+# --- Directories and Files ---
+ENV_DIR="$HOME/.zsh_envs"
+LOG="$ENV_DIR/env_detect.log"
+MASTER_ENV="$HOME/.zshrc"
+FINAL_ENV="$HOME/.env"
+
+# --- Prepare Folder ---
+/usr/bin/mkdir -p "$ENV_DIR"
+/usr/bin/touch "$LOG"
+: > "$LOG"
+
+# --- Append `source` line to ~/.zshrc if needed ---
+append_to_master_env_if_needed() {
+  local env_file="$1"
+  grep -q "source \"$env_file\"" "$MASTER_ENV" || echo "source \"$env_file\"" >> "$MASTER_ENV"
+}
+
+# --- Deduplication Helper ---
+dedup_colon_list() {
+  echo "$1" | /usr/bin/awk -v RS=':' '!seen[$1]++' | /usr/bin/paste -sd: -
+}
+
+# --- Final .env Snapshot ---
+echo "\n🧹 ${GREEN}Finalizing environment snapshot...${RESET}"
+
+export PATH="$(dedup_colon_list "$PATH")"
+export DYLD_LIBRARY_PATH="$(dedup_colon_list "$DYLD_LIBRARY_PATH")"
+export LIBRARY_PATH="$(dedup_colon_list "$LIBRARY_PATH")"
+
+echo "📄 Writing snapshot to $FINAL_ENV..."
+{
+  echo "# Environment snapshot on $(date '+%d.%m.%Y')"
+  echo "# Architecture: $(uname -m)"
+  echo "# macOS $(sw_vers -productVersion)"
+  echo "export PATH=\"$PATH\""
+  echo "export DYLD_LIBRARY_PATH=\"$DYLD_LIBRARY_PATH\""
+  echo "export LIBRARY_PATH=\"$LIBRARY_PATH\""
+} >| "$FINAL_ENV"
+
+echo "${GREEN}✅ Done. You can now run:${RESET} source ~/.zshrc"

@@ -1,0 +1,137 @@
+#!/usr/bin/env zsh
+
+# --- Color Codes ---
+GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RED=$'\033[0;31m'
+BLUE=$'\033[0;34m'; MAGENTA=$'\033[0;35m'; RESET=$'\033[0m'
+
+# --- Helpers ---
+dedup_colon_list() {
+  echo "$1" | awk -v RS=':' '!seen[$1]++' | paste -sd:
+}
+
+pathadd() {
+  local dir="$1"
+  if [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]]; then
+    export PATH="$dir:$PATH"
+  fi
+}
+
+libpathadd() {
+  local dir="$1"
+  for var in DYLD_LIBRARY_PATH LIBRARY_PATH; do
+    eval "current=\$$var"
+    export $var="$(dedup_colon_list "$dir:$current")"
+  done
+}
+
+# --- System Architecture and Rosetta Detection ---
+detect_architecture() {
+  local ARCH=$(uname -m)
+  local OS=$(uname -s)
+  IS_ROSETTA=0
+
+  echo "${GREEN}🔍 System Architecture: $ARCH${RESET}"
+  if [[ "$OS" != "Darwin" ]]; then
+    echo "${RED}❌ This script is only for macOS${RESET}"
+    exit 1
+  fi
+
+  if [[ "$ARCH" == "arm64" ]]; then
+    echo "${GREEN}✅ Apple Silicon (arm64) detected${RESET}"
+  elif [[ "$ARCH" == "x86_64" ]]; then
+    if [[ "$(sysctl -in sysctl.proc_translated 2>/dev/null)" == "1" ]]; then
+      IS_ROSETTA=1
+      echo "${YELLOW}⚠️ Running under Rosetta 2 (x86_64 on Apple Silicon)${RESET}"
+    else
+      echo "${BLUE}ℹ️ Native Intel Mac detected${RESET}"
+    fi
+  else
+    echo "${RED}❌ Unsupported architecture: $ARCH${RESET}"
+    exit 1
+  fi
+
+  export IS_ROSETTA
+}
+
+# --- Detect Available Compilers ---
+detect_compilers() {
+  echo "\n${GREEN}🔍 Detecting available compilers...${RESET}"
+  [[ -x /usr/bin/clang ]] && echo "✓ Apple Clang: ${BLUE}/usr/bin/clang${RESET}"
+  [[ -x /opt/local/bin/clang-mp-20 ]] && echo "✓ LLVM 20: ${BLUE}/opt/local/bin/clang-mp-20${RESET}"
+  [[ -x /opt/local/bin/gcc-mp-14 ]] && echo "✓ GCC 14: ${BLUE}/opt/local/bin/gcc-mp-14${RESET}"
+  [[ -x /usr/local/bin/mpicc ]] && echo "✓ MPI (mpicc): ${BLUE}/usr/local/bin/mpicc${RESET}"
+  [[ -x /usr/local/bin/pmixcc ]] && echo "✓ PMIx Compiler: ${BLUE}/usr/local/bin/pmixcc${RESET}"
+}
+
+# --- Compiler Switching ---
+switch_compiler() {
+  echo "\n${MAGENTA}🛠️ Switching compiler for $(pwd)...${RESET}"
+
+  if [[ -f ".use_rosetta" || "$IS_ROSETTA" == "1" ]]; then
+    echo "${YELLOW}🔁 Forcing Rosetta-compatible Clang (x86_64)${RESET}"
+    export CC="/usr/bin/clang"
+    export CXX="/usr/bin/clang++"
+    export CFLAGS="-arch x86_64"
+    export CXXFLAGS="-arch x86_64"
+    export LDFLAGS="-arch x86_64"
+
+  elif [[ -f ".use_llvm20" ]]; then
+    echo "${GREEN}🔁 Using LLVM 20 (MacPorts)${RESET}"
+    export CC="/opt/local/bin/clang-mp-20"
+    export CXX="/opt/local/bin/clang++-mp-20"
+    export FC="/opt/local/bin/gfortran-mp-20"
+    pathadd "/opt/local/libexec/llvm-20/bin"
+    libpathadd "/opt/local/libexec/llvm-20/lib"
+
+  elif [[ -f ".use_gcc" ]]; then
+    echo "${GREEN}🔁 Using GCC 14 (MacPorts)${RESET}"
+    export CC="/opt/local/bin/gcc-mp-14"
+    export CXX="/opt/local/bin/g++-mp-14"
+    export FC="/opt/local/bin/gfortran-mp-14"
+    pathadd "/opt/local/libexec/gcc14/bin"
+    libpathadd "/opt/local/libexec/gcc14/lib"
+
+  elif [[ -f ".use_clang_xcode" ]]; then
+    echo "${GREEN}🔁 Using AppleClang (Xcode)${RESET}"
+    export CC="/usr/bin/clang"
+    export CXX="/usr/bin/clang++"
+    pathadd "$(xcode-select -p)/usr/bin"
+
+  elif [[ -f ".use_mpi" ]]; then
+    echo "${GREEN}🔁 Using MPI Compilers${RESET}"
+    export CC="/usr/local/bin/mpicc"
+    export CXX="/usr/local/bin/mpic++"
+    export FC="/usr/local/bin/mpifort"
+
+  elif [[ -f ".use_pmix" ]]; then
+    echo "${GREEN}🔁 Using PMIx Compiler${RESET}"
+    export CC="/usr/local/bin/pmixcc"
+
+  else
+    echo "${BLUE}ℹ️ Defaulting to AppleClang${RESET}"
+    export CC="/usr/bin/clang"
+    export CXX="/usr/bin/clang++"
+  fi
+
+  export OMPI_CC="$CC"
+  export OMPI_CXX="$CXX"
+
+  # Fallbacks
+  export CLANG="/usr/bin/clang"
+  export CLANGPP="/usr/bin/clang++"
+  export GCC="/opt/local/bin/gcc-mp-14"
+  export GPP="/opt/local/bin/g++-mp-14"
+  export GFORTRAN="/opt/local/bin/gfortran-mp-14"
+
+  echo "  • CC  = ${BLUE}$CC${RESET}"
+  echo "  • CXX = ${BLUE}$CXX${RESET}"
+  [[ -n "$FC" ]] && echo "  • FC  = ${BLUE}$FC${RESET}"
+}
+
+# --- Entry Point ---
+main() {
+  detect_architecture
+  detect_compilers
+  switch_compiler
+}
+main "$@"

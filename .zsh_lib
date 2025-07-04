@@ -1,0 +1,119 @@
+#!/usr/bin/env zsh
+# ~/.zsh/load_scientific_envs.zsh
+
+# --- Color Codes ---
+GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RED=$'\033[0;31m';
+BLUE=$'\033[0;34m'; RESET=$'\033[0m'
+
+# --- Directories ---
+LIB_DIR="/Volumes/NVM/sources"
+ENV_DIR="$HOME/.zsh_envs"
+LOG_FILE="$ENV_DIR/env_load.log"
+/bin/mkdir -p "$ENV_DIR" && : > "$LOG_FILE"
+
+# --- Tools to load ---
+tools=(
+  "hdf5" "petsc" "trilinos" "moab" "libmesh" "netcdf"
+  "ncrystal" "vtk" "paraview" "mcpl" "mpi" "openmpi"
+  "xtensor" "xtl" "lxml"
+)
+#"silomesh"
+# --- Helper: Dedup Colon Path ---
+dedup_colon_list() {
+  echo "$1" | /usr/bin/awk -v RS=':' '!seen[$1]++' | /usr/bin/paste -sd: -
+}
+# --- Helper: Auto-detect and create env file if not found ---
+auto_detect_tool() {
+  local tool="$1"
+  local found_path=""
+  local env_file="${ENV_DIR}/${tool}.zsh_env"
+
+  echo "🔍 Attempting to locate $tool..." | /usr/bin/tee -a "$LOG_FILE"
+
+  found_path=$(mdfind "kMDItemDisplayName == '*$tool*'" | /usr/bin/awk '/(include|lib|bin)/' | /usr/bin/head -n 1)
+  if [[ -z "$found_path" ]]; then
+    found_path=$(find /opt /usr /Volumes/NVM -type d -iname "*$tool*" 2>/dev/null | /usr/bin/awk '/(include|lib|bin)/' | /usr/bin/head -n 1)
+  fi
+
+  if [[ -n "$found_path" ]]; then
+    echo "${GREEN}🔎 Found $tool at: ${BLUE}$found_path${RESET}" | /usr/bin/tee -a "$LOG_FILE"
+
+    include_dir=$(find "$found_path" -type d -iname "include" | /usr/bin/head -n 1)
+    lib_dir=$(find "$found_path" -type d -iname "lib" | /usr/bin/head -n 1)
+    bin_dir=$(find "$found_path" -type d -iname "bin" | /usr/bin/head -n 1)
+
+    {
+      echo "# Auto-generated $tool environment"
+      [[ -n "$include_dir" ]] && echo "export CPPFLAGS=\"-I$include_dir \$CPPFLAGS\""
+      [[ -n "$lib_dir" ]]     && echo "export LDFLAGS=\"-L$lib_dir \$LDFLAGS\""
+      [[ -n "$lib_dir" ]]     && echo "export LIBRARY_PATH=\"$lib_dir:\$LIBRARY_PATH\""
+      [[ -n "$bin_dir" ]]     && echo "export PATH=\"$bin_dir:\$PATH\""
+      echo "export ${tool:u}_DIR=\"$found_path\""
+    } > "$env_file"
+
+    echo "✅ Auto-created env: $env_file" | /usr/bin/tee -a "$LOG_FILE"
+    source "$env_file"
+  else
+    echo "${RED}❌ $tool not found in system paths.${RESET}" | /usr/bin/tee -a "$LOG_FILE"
+  fi
+}
+
+# --- Load .zsh_env file if it exists ---
+load_env_file() {
+  local tool="$1"
+  local env_file="${ENV_DIR}/${tool}.zsh_env"
+  if [[ -f "$env_file" ]]; then
+    source "$env_file"
+    echo "✅ Loaded: $tool from $env_file" | /usr/bin/tee -a "$LOG_FILE"
+  else
+    echo "⚠️  Not found: $tool.zsh_env — attempting to detect..." | /usr/bin/tee -a "$LOG_FILE"
+    auto_detect_tool "$tool"
+  fi
+}
+
+# --- Special Handling for VTK ---
+load_vtk_env() {
+  local VTK_DIR="/Volumes/NVM/sources/neutron/vtk"
+  local VTK_LIB_PATH="$VTK_DIR/lib"
+  local VTK_PKG_CONFIG_PATH="$VTK_LIB_PATH/pkgconfig"
+
+  if [[ -d "$VTK_DIR/bin" ]]; then
+    export PATH="$VTK_DIR/bin:$PATH"
+    echo "✓ Added VTK binaries to PATH: $VTK_DIR/bin"
+  else
+    echo "⚠️  VTK bin directory not found: $VTK_DIR/bin" >&2
+  fi
+
+  if [[ -d "$VTK_LIB_PATH" ]]; then
+    export LD_LIBRARY_PATH="$VTK_LIB_PATH:$LD_LIBRARY_PATH"
+    echo "✓ Added VTK libraries to LD_LIBRARY_PATH: $VTK_LIB_PATH"
+  else
+    echo "⚠️  VTK lib directory not found: $VTK_LIB_PATH" >&2
+  fi
+
+  if [[ -d "$VTK_PKG_CONFIG_PATH" ]]; then
+    export PKG_CONFIG_PATH="$VTK_PKG_CONFIG_PATH:$PKG_CONFIG_PATH"
+    echo "✓ Added VTK pkg-config path: $VTK_PKG_CONFIG_PATH"
+  else
+    echo "⚠️  VTK pkg-config directory not found: $VTK_PKG_CONFIG_PATH" >&2
+  fi
+
+  echo ""
+  echo "Current VTK Environment:"
+  echo "VTK_DIR           = $VTK_DIR"
+  }
+#echo "PATH              = $(dedup_colon_list "$PATH")"
+#echo "LD_LIBRARY_PATH   = $(dedup_colon_list "$LD_LIBRARY_PATH")"
+#echo "PKG_CONFIG_PATH   = $(dedup_colon_list "$PKG_CONFIG_PATH")"
+
+# --- Main Loader ---
+echo "${GREEN}🔬 Loading Scientific Environments...${RESET}"
+for tool in "${tools[@]}"; do
+  [[ "$tool" == "vtk" ]] && load_vtk_env
+  load_env_file "$tool"
+done
+
+# --- Final path cleanup ---
+export PATH=$(dedup_colon_list "$PATH")
+export LD_LIBRARY_PATH=$(dedup_colon_list "$LD_LIBRARY_PATH")
+export LIBRARY_PATH=$(dedup_colon_list "$LIBRARY_PATH")

@@ -1,0 +1,124 @@
+#!/usr/bin/env zsh
+# ==============================================================================
+# GUI Tools Configuration Script (macOS, Apple Silicon)
+# Supports: Gmsh, R.app, TeXShop, SCALE, ParaView, RStudio, MATLAB, Spyder, VSCode
+# ==============================================================================
+
+# --- Color Codes ---
+GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; BLUE=$'\033[0;34m'; RESET=$'\033[0m'
+
+# --- Environment Directory & Log File ---
+# Ensure the directory for logs exists and clear the log file
+ENV_DIR="$HOME/.zsh_envs"
+LOG_FILE="$ENV_DIR/gui_env_load.log"
+/bin/mkdir -p "$ENV_DIR" && : > "$LOG_FILE"
+
+echo "\n${GREEN}🧪 Configuring GUI Scientific Applications...${RESET}" | /usr/bin/tee -a "$LOG_FILE"
+
+# --- Helper Functions (assuming they are not globally defined elsewhere) ---
+
+# pathadd: Adds a directory to the PATH environment variable if it exists and isn't already there.
+pathadd() {
+  local dir="$1"
+  if [[ -d "$dir" ]] && [[ ":$PATH:" != *":$dir:"* ]]; then
+    PATH="$dir:$PATH"
+    echo "  Added to PATH: $dir" | /usr/bin/tee -a "$LOG_FILE"
+  fi
+}
+
+# libpathadd: Adds a directory to DYLD_LIBRARY_PATH (macOS) and LD_LIBRARY_PATH (Linux/general)
+# if it exists and isn't already there.
+libpathadd() {
+  local dir="$1"
+  if [[ -d "$dir" ]]; then
+    # For macOS
+    if [[ -z "$DYLD_LIBRARY_PATH" || ":$DYLD_LIBRARY_PATH:" != *":$dir:"* ]]; then
+      export DYLD_LIBRARY_PATH="$dir:$DYLD_LIBRARY_PATH"
+      echo "  Added to DYLD_LIBRARY_PATH: $dir" | /usr/bin/tee -a "$LOG_FILE"
+    fi
+    # For general Linux compatibility (though this script is macOS specific)
+    if [[ -z "$LD_LIBRARY_PATH" || ":$LD_LIBRARY_PATH:" != *":$dir:"* ]]; then
+      export LD_LIBRARY_PATH="$dir:$LD_LIBRARY_PATH"
+      echo "  Added to LD_LIBRARY_PATH: $dir" | /usr/bin/tee -a "$LOG_FILE"
+    fi
+  fi
+}
+
+# configure_gui_app: Configures environment variables for a given GUI application.
+# It checks if the application's main path exists and then adds its bin, lib, and include
+# directories to appropriate environment variables.
+configure_gui_app() {
+  local app_path="$1"
+  local app_name="$2"
+  local bin_dir="$app_path/Contents/MacOS"
+  local lib_dir="$app_path/Contents/lib"
+  local include_dir="$app_path/Contents/include"
+
+  if [[ -d "$app_path" ]]; then
+    echo "✅ Found $app_name at: ${BLUE}$app_path${RESET}" | /usr/bin/tee -a "$LOG_FILE"
+
+    # Add the application's MacOS directory (where executables usually reside) to PATH
+    pathadd "$bin_dir"
+
+    # Add library directory to DYLD_LIBRARY_PATH and LD_LIBRARY_PATH
+    if [[ -d "$lib_dir" ]]; then
+      libpathadd "$lib_dir"
+      # Also add to LDFLAGS for compilation purposes
+      export LDFLAGS="-L$lib_dir $LDFLAGS"
+      echo "  Exported LDFLAGS: -L$lib_dir" | /usr/bin/tee -a "$LOG_FILE"
+    fi
+
+    # Add include directory to CPPFLAGS
+    if [[ -d "$include_dir" ]]; then
+      export CPPFLAGS="-I$include_dir $CPPFLAGS"
+      echo "  Exported CPPFLAGS: -I$include_dir" | /usr/bin/tee -a "$LOG_FILE"
+    fi
+  else
+    echo "${YELLOW}⚠️  $app_name not found at $app_path${RESET}" | /usr/bin/tee -a "$LOG_FILE"
+  fi
+}
+
+# --- Application Paths ---
+# Declare an associative array to store application names and their primary paths.
+# Note: The array name 'gui_apps' should NOT be in square brackets during declaration.
+declare -A gui_apps=(
+  [Gmsh]="/Volumes/NVM/Applications/Gmsh.app"
+  [R.app]="/Volumes/NVM/Applications/R.app"
+  [TeXShop]="/Volumes/NVM/Applications/TeX/TeXShop.app"
+  [SCALE]="/Volumes/NVM/Applications/SCALE-6.2.1.app"
+  # ParaView has multiple common installation locations.
+  # We'll handle this specifically in the loop below.
+  [ParaView_Primary]="/Applications/ParaView.app"
+  [ParaView_Secondary]="/Volumes/NVM/Applications/ParaView.app"
+  [RStudio]="/Volumes/NVM/Applications/RStudio.app"
+  [MATLAB]="/Volumes/NVM/Applications/MATLAB_R2024a.app"
+  [Spyder]="/Volumes/NVM/Applications/Spyder.app"
+  [OCTave]="/Applications/Octave.app" # Corrected case for Octave.app
+)
+#  [VSCode]="/Applications/Visual Studio Code.app" # Added VSCode as it's a common dev tool
+
+# --- Main Loader ---
+# Iterate through the defined GUI applications and configure them.
+for app_key in "${(@k)gui_apps}"; do
+  local app_name="${app_key%%_*}" # Extract base name (e.g., "ParaView" from "ParaView_Primary")
+  local app_path="${gui_apps[$app_key]}"
+
+  # Special handling for ParaView to check multiple paths
+  if [[ "$app_key" == "ParaView_Primary" ]]; then
+    if [[ -d "$app_path" ]]; then
+      configure_gui_app "$app_path" "ParaView"
+    elif [[ -d "${gui_apps[ParaView_Secondary]}" ]]; then
+      configure_gui_app "${gui_apps[ParaView_Secondary]}" "ParaView"
+    else
+      echo "${YELLOW}⚠️  ParaView not found at primary or secondary locations.${RESET}" | /usr/bin/tee -a "$LOG_FILE"
+    fi
+  elif [[ "$app_key" == "ParaView_Secondary" ]]; then
+    # Skip processing secondary ParaView path if primary was already handled
+    continue
+  else
+    # For all other applications, use their defined path
+    configure_gui_app "$app_path" "$app_name"
+  fi
+done
+
+echo "${GREEN}✅ GUI Scientific Applications configuration complete.${RESET}" | /usr/bin/tee -a "$LOG_FILE"
